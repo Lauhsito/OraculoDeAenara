@@ -4,10 +4,8 @@ import random
 import json
 import os
 
-# ID del creador/admin
 CREADOR_ID = 621412276452327440
 
-# Lista de razas (nombre, emoji)
 RAZAS = [
     ("Humano", "🧙‍♂️"),
     ("Elfo", "🧝‍♂️"),
@@ -16,16 +14,29 @@ RAZAS = [
     ("Hada", "🧚‍♀️"),
     ("Centauro", "🐎"),
     ("Goblin", "🟢"),
-    ("Mecánico", "🤖"),
+    ("Máquina", "🤖"),
     ("🎲 Aleatoria", "🎲")
 ]
 
-# --- Subclase del SELECT ---
+GENEROS = ["Masculino", "Femenino"]
+
+ELEMENTOS = [
+    ("Agua", "💧"),
+    ("Planta", "🌿"),
+    ("Hielo", "❄️"),
+    ("Fuego", "🔥"),
+    ("Viento", "🍃"),
+    ("Piedra", "🪨"),
+    ("Eléctrico", "⚡")
+]
+
+# --- SELECT DE RAZA ---
 class RazaSelect(discord.ui.Select):
-    def __init__(self, user_id, personajes, guardar_func):
+    def __init__(self, user_id, personajes, guardar_func, bot):
         self.user_id = user_id
         self.personajes = personajes
         self.guardar_func = guardar_func
+        self.bot = bot
 
         opciones = [
             discord.SelectOption(label=nombre, value=nombre, emoji=emoji)
@@ -43,19 +54,101 @@ class RazaSelect(discord.ui.Select):
         if eleccion == "🎲 Aleatoria":
             eleccion = random.choice([n for n, _ in RAZAS if n != "🎲 Aleatoria"])
 
-        self.personajes[str(self.user_id)] = eleccion
+        self.personajes[str(self.user_id)] = {"raza": eleccion}
         self.guardar_func()
-        await interaction.response.edit_message(
-            content=f"✅ Has creado tu personaje como **{eleccion}**.", view=None
-        )
 
-# --- Subclase del VIEW ---
+        await interaction.response.edit_message(content=f"✅ Has elegido ser un **{eleccion}**.", view=None)
+
+        view = GeneroView(self.user_id, self.personajes, self.guardar_func, self.bot)
+        await interaction.followup.send("⚧️ Ahora elige el **género** de tu personaje:", view=view)
+
+# --- VIEW DE RAZA ---
 class RazaView(discord.ui.View):
+    def __init__(self, user_id, personajes, guardar_func, bot):
+        super().__init__(timeout=60)
+        self.add_item(RazaSelect(user_id, personajes, guardar_func, bot))
+
+# --- SELECT DE GÉNERO ---
+class GeneroSelect(discord.ui.Select):
+    def __init__(self, user_id, personajes, guardar_func, bot):
+        self.user_id = user_id
+        self.personajes = personajes
+        self.guardar_func = guardar_func
+        self.bot = bot
+
+        opciones = [discord.SelectOption(label=g, value=g) for g in GENEROS]
+
+        super().__init__(placeholder="Selecciona el género...", options=opciones)
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ No puedes elegir por otro usuario.", ephemeral=True)
+            return
+
+        genero = self.values[0]
+        self.personajes[str(self.user_id)]["genero"] = genero
+        self.guardar_func()
+
+        await interaction.response.edit_message(content=f"✅ Género seleccionado: **{genero}**.", view=None)
+
+        canal = interaction.channel
+        usuario = interaction.user
+
+        await canal.send("📝 ¿Cuál es el **nombre** de tu personaje?")
+
+        def check(m):
+            return m.author.id == usuario.id and m.channel.id == canal.id
+
+        try:
+            respuesta = await self.bot.wait_for("message", timeout=60, check=check)
+            self.personajes[str(self.user_id)]["nombre"] = respuesta.content
+            self.guardar_func()
+        except Exception:
+            await canal.send("⏰ Tiempo agotado. Podés completar tu ficha más tarde.")
+            return
+
+        # Selección de elemento
+        view = ElementoView(self.user_id, self.personajes, self.guardar_func)
+        await canal.send("🔮 Finalmente, elige tu **elemento**:", view=view)
+
+# --- VIEW DE GÉNERO ---
+class GeneroView(discord.ui.View):
+    def __init__(self, user_id, personajes, guardar_func, bot):
+        super().__init__(timeout=60)
+        self.add_item(GeneroSelect(user_id, personajes, guardar_func, bot))
+
+# --- SELECT DE ELEMENTO ---
+class ElementoSelect(discord.ui.Select):
+    def __init__(self, user_id, personajes, guardar_func):
+        self.user_id = user_id
+        self.personajes = personajes
+        self.guardar_func = guardar_func
+
+        opciones = [
+            discord.SelectOption(label=nombre, value=nombre, emoji=emoji)
+            for nombre, emoji in ELEMENTOS
+        ]
+
+        super().__init__(placeholder="Selecciona tu elemento...", options=opciones)
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ No puedes elegir por otro usuario.", ephemeral=True)
+            return
+
+        elemento = self.values[0]
+        self.personajes[str(self.user_id)]["elemento"] = elemento
+        self.guardar_func()
+
+        await interaction.response.edit_message(content=f"🔗 Elemento seleccionado: **{elemento}**. ¡Tu ficha ha sido completada!", view=None)
+
+# --- VIEW DE ELEMENTO ---
+class ElementoView(discord.ui.View):
     def __init__(self, user_id, personajes, guardar_func):
         super().__init__(timeout=60)
-        self.add_item(RazaSelect(user_id, personajes, guardar_func))
+        self.add_item(ElementoSelect(user_id, personajes, guardar_func))
 
-# --- COG principal ---
+# --- COG ---
 class CrearPersonaje(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -80,45 +173,19 @@ class CrearPersonaje(commands.Cog):
             await ctx.send("⚠️ Ya has creado tu personaje.")
             return
 
-        view = RazaView(user_id, self.personajes, self.guardar_personajes)
+        view = RazaView(user_id, self.personajes, self.guardar_personajes, self.bot)
         await ctx.send("🌌 Elige tu raza para comenzar tu viaje en Aenara:", view=view)
 
     @commands.command(name="verpj")
     async def ver_personaje(self, ctx):
-        raza = self.personajes.get(str(ctx.author.id))
-        if not raza:
+        pj = self.personajes.get(str(ctx.author.id))
+        if not pj:
             await ctx.send("❌ Aún no has creado tu personaje.")
         else:
-            await ctx.send(f"📜 Tu personaje es un **{raza}**.")
-
-    @commands.command(name="eliminarpj")
-    async def eliminar_personaje(self, ctx):
-        if ctx.author.id != CREADOR_ID:
-            await ctx.send("❌ Solo el creador puede usar este comando.")
-            return
-
-        if str(ctx.author.id) in self.personajes:
-            self.personajes.pop(str(ctx.author.id))
-            self.guardar_personajes()
-            await ctx.send("🗑️ Tu personaje fue eliminado.")
-        else:
-            await ctx.send("ℹ️ No habías creado un personaje.")
-
-    @commands.command(name="modificarpj")
-    async def modificar_personaje(self, ctx, *, nueva_raza: str):
-        if ctx.author.id != CREADOR_ID:
-            await ctx.send("❌ Solo el creador puede modificar razas manualmente.")
-            return
-
-        nombres_validos = [n for n, _ in RAZAS if n != "🎲 Aleatoria"]
-
-        if nueva_raza not in nombres_validos:
-            await ctx.send(f"❌ Raza inválida. Opciones válidas: {', '.join(nombres_validos)}")
-            return
-
-        self.personajes[str(ctx.author.id)] = nueva_raza
-        self.guardar_personajes()
-        await ctx.send(f"♻️ Raza modificada manualmente a **{nueva_raza}**.")
+            ficha = f"📜 **Tu personaje:**\n"
+            for clave, valor in pj.items():
+                ficha += f"• **{clave.capitalize()}**: {valor}\n"
+            await ctx.send(ficha)
 
 # --- Registro del COG ---
 async def setup(bot):
